@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <thread>
 #include <list>
 #include <string>
@@ -204,7 +205,7 @@ void WorkerThread(RedisServer src_svr, CodisCluster codis, std::vector<LockedLis
                 freeReplyObject(r);
 
                 ++cnt;
-                if (cnt % 10000 == 0) {
+                if (cnt % 2000 == 0) {
                     std::cout << "WorkerThread " << id << " count: " << cnt << std::endl;
                 }
             }
@@ -216,23 +217,64 @@ void WorkerThread(RedisServer src_svr, CodisCluster codis, std::vector<LockedLis
     }
 }
 
-//
 int main(int argc, char** argv) {
-    // TODO: 通过输入获取
-    RedisServer src_redis = {"127.0.0.1", 6379, "a", 0, 0};
+    if (argc != 2) {
+        std::cout << "usage: redis-migrate conf_file" << std::endl;
+        return 0;
+    }
 
-    CodisCluster codis(1024);
-    codis.svrs_.emplace_back(RedisServer("127.0.0.1", 6380, "a", 0, 300));
-    codis.svrs_.emplace_back(RedisServer("127.0.0.1", 6380, "a", 301, 600));
-    codis.svrs_.emplace_back(RedisServer("127.0.0.1", 6380, "a", 601, 900));
-    codis.svrs_.emplace_back(RedisServer("127.0.0.1", 6380, "a", 901, 1023));
+    std::string conf_path(argv[1]);
+    std::ifstream conf_file(conf_path);
 
     int N = 32;
-    std::vector<LockedList> lists(N);
+    RedisServer src_redis = {"", 0, "", 0, 0};
+    CodisCluster codis(1024);
 
+    std::string attr;
+    std::string val;
+    std::string ip;
+    std::string port;
+    std::string pwd;
+    std::string min;
+    std::string max;
+    while (conf_file >> attr) {
+        if (attr == "slot_num") {
+            conf_file >> val;
+            codis.slot_num_ = std::stoi(val);
+            std::cout << "slot num: " << codis.slot_num_ << std::endl;
+            continue;
+        }
+
+        if (attr == "parallel") {
+            conf_file >> val;
+            N = std::stoi(val);
+            std::cout << "parallel num: " << N << std::endl;
+            continue;
+        }
+
+        if (attr == "source") {
+            conf_file >> ip >> port >> pwd;
+            src_redis.ip_ = ip;
+            src_redis.port_ = std::stoi(port);
+            src_redis.pwd_ = pwd;
+            std::cout << "source server: " << ip << " " << port << " " << pwd << std::endl;
+            continue;
+        }
+
+        if (attr == "dest") {
+            conf_file >> ip >> port >> pwd >> min >> max;
+            codis.svrs_.emplace_back(RedisServer(ip, std::stoi(port), pwd, std::stoi(min), std::stoi(max)));
+            std::cout << "dest server: " << ip << " " << port << " " << pwd << " " << min << " " << max << std::endl;
+            continue;
+        }
+    }
+
+    std::vector<LockedList> lists(N);
     std::thread scan_thread(ScanThread, src_redis, std::ref(lists));
     std::thread worker_thread(WorkerThread, src_redis, codis, std::ref(lists));
 
     scan_thread.join();
     worker_thread.join();
+
+    std::cout << "All done" << std::endl;
 }
